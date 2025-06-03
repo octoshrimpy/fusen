@@ -163,8 +163,12 @@
     customElements.define("kanban-board", class extends HTMLElement {
       connectedCallback() {
         fetch(this.getAttribute("src"))
-          .then(res => res.text())
-          .then(md => this.initialize(md));
+          .then(res => {
+            if (!res.ok) throw new Error("Failed to load board file!");
+            return res.text()
+          })
+          .then(md => this.initialize(md))
+          .catch(err => console.error("Load error:", err));
       }
 
       initialize(md) {
