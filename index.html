@@ -364,6 +364,7 @@
           setTitle() {
             const title = this.config["board-title"] || "Kanban";
             document.getElementById("board-title").textContent = title;
+            document.getElementById("board-title-input").value = title; 
           }
 
           // TODO: 
@@ -388,6 +389,13 @@
                 if (col) col.tasks.push({ symbol: m[1], text: m[2] });
               }
             });
+          }
+
+          updateSettings(data) {
+            if (data.title) {
+              this.config["board-title"] = data.title;
+              this.setTitle(); // re-render title
+            }
           }
 
           setupBoard() {
@@ -478,6 +486,18 @@
         a.download = filename;
         a.click();
         URL.revokeObjectURL(url);
+      };
+  
+      document.getElementById("settings-form").onsubmit = (e) => {
+        e.preventDefault();
+
+        const board = document.querySelector("kanban-board");
+        if (!board) return;
+
+        const title = document.getElementById("board-title-input").value.trim();
+        board.updateSettings({ title });
+
+        closeModal(document.getElementById("settings-modal"));
       };
 
       /*
