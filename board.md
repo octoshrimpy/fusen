@@ -16,6 +16,13 @@ columns:                        # required
 <!-- simple view (default) -->
 
 - `[<]` task 1
+  this is the body of the task. it doesnt have to be a list,
+  but it does need to be indented properly.
+  it can also contain subtasks:
+  - `[ ]` subtask 1 
+  - `[x]` subtask 2
+    if there are subtasks, it will show the total vs cancelled/done
+    - `[ ]` task can also be subsubtasks! 
 - `[<]` task 3
 - `[ ]` task 2
 - `[ ]` task 4
