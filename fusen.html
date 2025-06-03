@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Fusen</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link
+    rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css"
+  />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@nerdfonts/web-fonts@latest/css/nerdfonts.css" />
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/octoshrimpy/microcss@main/nerdfonts.css">
+  <style>
+    html, body {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+    /* clean up some pico styling */
+    header.container-fluid:has(+ main.container-fluid) {
+      padding-bottom: 0;
+    }
+    header ul li a[role=clean-btn] {
+      cursor: pointer;
+    }
+    /* end cleanup */
+    main {
+      flex-grow: 1;
+      display: flex;
+      flex-direction: column;
+    }
+    article.card {
+      background: var(--pico-muted-color);
+      padding: 0.5rem;
+      border-radius: 4px;
+      cursor: pointer;
+      margin-bottom: 0.5rem;
+    }
+    kanban-column {
+      display: flex;
+      flex-direction: column;
+      overflow-y: scroll;
+      flex: 1;
+    }
+
+    kanban-board {
+      display: flex;
+      flex: 1;
+      gap: 1rem;
+      overflow-x: auto;
+
+      &.drag-active {
+        kanban-column {
+          background: rgb(from tomato r g b / 0.125);
+
+          &.hover {
+            outline: 2px solid rgb(from tomato r g b / 0.33);
+            background: rgb(from tomato r g b / 0.25);
+          }
+        }
+      }
+
+    }
+  </style>
+</head>
+<body>
+  <header class="container-fluid">
+    <nav>
+      <ul><li>fusen</li></ul>
+      <ul>
+        <li><a id="save" role="clean-btn" class="outline secondary">save</a></li>
+        <li><a role="clean-btn" class="outline secondary">load</a></li>
+        <li>
+        <a id="settings-button" role="clean-btn" class="icon outline secondary" data-target="settings-modal" onclick="toggleModal(event)">
+          <i class="nf nf-md-cog"></i>
+        </a></li>
+      </ul>
+    </nav>
+  </header>
+
+  <dialog id="settings-modal">
+    <article>
+      <header>
+        <h3>Board Settings</h3>
+      </header>
+      <form id="settings-form">
+        <label for="board-title-input">Board Title</label>
+        <input type="text" id="board-title-input" name="title" required />
+
+        <footer>
+          <button type="submit">Save</button>
+          <button id="cancel-settings" type="button" class="secondary">Cancel</button>
+        </footer>
+      </form>
+    </article>
+  </dialog>
+
+
+  <main class="container-fluid">
+    <h1 id="board-title">Loading...</h1>
+    <kanban-board src="board.md"></kanban-board>
+  </main>
+
+  <footer></footer>
+
+  <script>
+    customElements.define("kanban-column", class extends HTMLElement {
+      set data({ name, symbol, tasks }) {
+        this.setAttribute("data-symbol", symbol);
+        this.innerHTML = `<h2>${name}</h2>`;
+
+        // Enable drop
+        this.ondragover = e => {
+          e.preventDefault();
+          if (!this.classList.contains("hover")) {
+            this.classList.add("hover");
+          }
+        };
+
+        this.ondragleave = e => {
+          // optional: delay to avoid flicker
+          this.classList.remove("hover");
+        };
+
+        this.ondrop = e => {
+          e.preventDefault();
+          this.classList.remove("hover");
+          this.closest("kanban-board")?.classList.remove("drag-active");
+
+          const text = e.dataTransfer.getData("text/plain");
+          const fromSymbol = e.dataTransfer.getData("text/symbol");
+
+          this.dispatchEvent(new CustomEvent("move-task", {
+            bubbles: true,
+            detail: { from: fromSymbol, to: this.dataset.symbol, text }
+          }));
+        };
+
+
+        tasks.forEach(task => {
+          const el = document.createElement("article");
+          el.className = "card";
+          el.setAttribute("draggable", "true");
+          el.setAttribute("data-symbol", task.symbol);
+          el.textContent = task.text;
+
+          el.ondragstart = e => {
+            e.dataTransfer.setData("text/plain", task.text);
+            e.dataTransfer.setData("text/symbol", task.symbol);
+            this.closest("kanban-board")?.classList.add("drag-active");
+          };
+
+          el.ondragend = () => {
+            this.closest("kanban-board")?.classList.remove("drag-active");
+          };
+
+          this.appendChild(el);
+        });
+      }
+    });
+
+
+    customElements.define("kanban-board", class extends HTMLElement {
+      connectedCallback() {
+        fetch(this.getAttribute("src"))
+          .then(res => res.text())
+          .then(md => this.initialize(md));
+      }
+
+      initialize(md) {
+        this.rawMarkdown = md;
+        this.config = {};
+        this.cols = [];
+        this.parseFrontmatter();
+        this.setTitle();
+        this.parseTasks();
+        this.setupBoard();
+        this.renderColumns();
+        this.addEventListener("move-task", this.moveTask.bind(this));
+      }
+
+      parseFrontmatter() {
+        const fm = this.rawMarkdown.match(/^---\s*([\s\S]+?)\s*---/);
+        if (!fm) return;
+
+        const lines = fm[1].split("\n")
+          .map(line => line.replace(/#.*/, "").trim()) // remove inline comments
+          .filter(line => line); // remove empty lines
+
+        lines.forEach(line => {
+          const [k, v] = line.split(/:(.+)/).map(s => s && s.trim());
+          if (k === "columns" || !v) return;
+          this.config[k] = v;
+        });
+
+        lines
+          .filter(l => l.startsWith("- ["))
+          .forEach(l => {
+            const m = l.match(/-\s*\[(.)\]\s*(.+)/);
+            if (m) this.cols.push({ symbol: m[1], name: m[2], tasks: [] });
+          });
+      }
+
+      setTitle() {
+        const title = this.config["board-title"] || "Kanban";
+        document.getElementById("board-title").textContent = title;
+      }
+
+      parseTasks() {
+        const taskLines = this.rawMarkdown.split("\n")
+          .filter(l => /^\s*-\s*`\[[^\]]\]`/.test(l));
+
+        taskLines.forEach(l => {
+          const m = l.match(/`\[(.)\]`\s*(.+)/);
+          if (m) {
+            const col = this.cols.find(c => c.symbol === m[1]);
+            if (col) col.tasks.push({ symbol: m[1], text: m[2] });
+          }
+        });
+      }
+
+      setupBoard() {
+        this.innerHTML = "";
+      }
+
+      renderColumns() {
+        this.cols.forEach(col => {
+          const el = document.createElement("kanban-column");
+          el.data = col;
+          this.appendChild(el);
+        });
+      }
+
+      moveTask(e) {
+        const { text, from, to } = e.detail;
+        if (from === to) return;
+
+        const fromCol = this.cols.find(c => c.symbol === from);
+        const toCol = this.cols.find(c => c.symbol === to);
+        if (!fromCol || !toCol) return;
+
+        // Update data
+        const taskIndex = fromCol.tasks.findIndex(t => t.text === text);
+        if (taskIndex === -1) return;
+
+        const [task] = fromCol.tasks.splice(taskIndex, 1);
+        task.symbol = to;
+        toCol.tasks.push(task);
+
+        // Move DOM element
+        const fromEl = this.querySelector(`kanban-column[data-symbol="${from}"]`);
+        const toEl = this.querySelector(`kanban-column[data-symbol="${to}"]`);
+        const card = Array.from(fromEl.querySelectorAll("article.card"))
+          .find(el => el.textContent.trim() === text.trim());
+
+        if (card && toEl) toEl.appendChild(card);
+      }
+
+
+      toMarkdown() {
+        const lines = [];
+
+        // Frontmatter
+        lines.push("---");
+        if (this.config["board-title"]) lines.push(`board-title: ${this.config["board-title"]}`);
+        lines.push("columns:");
+        this.cols.forEach(col => lines.push(`  - [${col.symbol}] ${col.name}`));
+        lines.push("---\n");
+
+        // Title (optional)
+        if (this.config["board-title"]) {
+          lines.push(`# ${this.config["board-title"]}\n`);
+        }
+
+        // Tasks
+        this.cols.forEach(col => {
+          col.tasks.forEach(task => {
+            lines.push(`- \`[${task.symbol}]\` ${task.text}`);
+          });
+        });
+
+        return lines.join("\n");
+      }
+    });
+
+    document.getElementById("save").onclick = () => {
+      const board = document.querySelector("kanban-board");
+      if (!board) return;
+
+      const filename = prompt("Save as:", "board.md");
+      if (!filename) return;
+
+      const content = board.toMarkdown();
+      const blob = new Blob([content], { type: "text/markdown" });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
+
+
+
+    /*
+    * Modal
+    *
+    * Pico.css - https://picocss.com
+    * Copyright 2019-2024 - Licensed under MIT
+    */
+
+    // Config
+    const isOpenClass = "modal-is-open";
+    const openingClass = "modal-is-opening";
+    const closingClass = "modal-is-closing";
+    const scrollbarWidthCssVar = "--pico-scrollbar-width";
+    const animationDuration = 400; // ms
+    let visibleModal = null;
+
+    // Toggle modal
+    const toggleModal = (event) => {
+      event.preventDefault();
+      const modal = document.getElementById(event.currentTarget.dataset.target);
+      if (!modal) return;
+      modal && (modal.open ? closeModal(modal) : openModal(modal));
+    };
+
+    // Open modal
+    const openModal = (modal) => {
+      const { documentElement: html } = document;
+      const scrollbarWidth = getScrollbarWidth();
+      if (scrollbarWidth) {
+        html.style.setProperty(scrollbarWidthCssVar, `${scrollbarWidth}px`);
+      }
+      html.classList.add(isOpenClass, openingClass);
+      setTimeout(() => {
+        visibleModal = modal;
+        html.classList.remove(openingClass);
+      }, animationDuration);
+      modal.showModal();
+    };
+
+    // Close modal
+    const closeModal = (modal) => {
+      visibleModal = null;
+      const { documentElement: html } = document;
+      html.classList.add(closingClass);
+      setTimeout(() => {
+        html.classList.remove(closingClass, isOpenClass);
+        html.style.removeProperty(scrollbarWidthCssVar);
+        modal.close();
+      }, animationDuration);
+    };
+
+    // Close with a click outside
+    document.addEventListener("click", (event) => {
+      if (visibleModal === null) return;
+      const modalContent = visibleModal.querySelector("article");
+      const isClickInside = modalContent.contains(event.target);
+      !isClickInside && closeModal(visibleModal);
+    });
+
+    // Close with Esc key
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && visibleModal) {
+        closeModal(visibleModal);
+      }
+    });
+
+    // Get scrollbar width
+    const getScrollbarWidth = () => {
+      const scrollbarWidth = window.innerWidth - document.documentElement.clientWidth;
+      return scrollbarWidth;
+    };
+
+    // Is scrollbar visible
+    const isScrollbarVisible = () => {
+      return document.body.scrollHeight > screen.height;
+    };
+
+
+  </script>
+</body>
+</html>
