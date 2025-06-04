@@ -115,7 +115,9 @@
         }
       }
 
-      article {
+      article:has(details) {
+        background:tomato;
+        
         details:not([open]) summary {
           border-bottom-left-radius: var(--pico-border-radius);
           border-bottom-right-radius: var(--pico-border-radius);
@@ -132,8 +134,9 @@
             margin-inline-start: calc(var(--pico-spacing, 1rem) * 0.5);
           }
         }
+
         details {
-          margin: unset;
+          /* margin: ; */
         }
       }
 
@@ -223,6 +226,10 @@
         <form id="settings-form">
           <label for="board-title-input">Board Title</label>
           <input type="text" id="board-title-input" name="title" required />
+          <label for="save-as-cols">
+            <input type="checkbox" id="save-as-cols" name="saveAsCols" role="switch" />
+            Save board as grouped columns
+          </label>
 
           <footer>
             <button type="submit">Save</button>
@@ -293,9 +300,35 @@
               el.className = "card";
               el.setAttribute("draggable", "true");
               el.setAttribute("data-symbol", task.symbol);
-              el.textContent = task.text;
-              // el.
 
+              // Count subtasks
+              const total = task.subtasks?.length || 0;
+              const done = task.subtasks?.filter((s) => s.symbol === "x" || s.symbol === "-").length || 0;
+
+              // HTML content
+              const countHTML = total ? `<count>${done}/${total}</count>` : "";
+              const descHTML = task.description ? `<p>${task.description}</p>` : "";
+              const footerHTML = task.subtasks?.length
+                ? `<footer><ul>${task.subtasks
+                    .map(
+                      (s) =>
+                        `<li><code>[${s.symbol}]</code> ${s.text}</li>`
+                    )
+                    .join("")}</ul></footer>`
+                : "";
+
+              el.innerHTML = `
+                <details>
+                  <summary class="arrow-first">
+                    <header>${task.text}</header>
+                    ${countHTML}
+                  </summary>
+                  ${descHTML}
+                  ${footerHTML}
+                </details>
+              `;
+
+              // Drag handlers
               el.ondragstart = (e) => {
                 e.dataTransfer.setData("text/plain", task.text);
                 e.dataTransfer.setData("text/symbol", task.symbol);
@@ -364,39 +397,73 @@
           setTitle() {
             const title = this.config["board-title"] || "Kanban";
             document.getElementById("board-title").textContent = title;
-            document.getElementById("board-title-input").value = title; 
+
+            // Prefill modal fields
+            document.getElementById("board-title-input").value = title;
+            document.getElementById("save-as-cols").checked =
+              this.config["save-as-cols"] === "true";
           }
 
-          // TODO: 
-          // if line starts with \s{2} and previous line did not, then this line is a descriptor to previous line. 
-          //     store it as a var for use later
-          // if line starts with \s{2}-\s[ then it is a subtask. 
-          //     that means this task has subtasks
-          //     show total subtask count on header, float-right.
-          //     <count>12/2</count> added after <header> within <summary>
-          // if line starts with \s{2} and previous line also did, then this is a continuation of the descriptor. 
-          //     append as newline to the var
           parseTasks() {
-            // TODO: this should not match frontmatter
-            const taskLines = this.rawMarkdown
-              .split("\n")
-              .filter((l) => /^\s*-\s*`?\[[^\]]\]`?/.test(l));
+            const lines = this.rawMarkdown.split("\n");
+            let currentTask = null;
+            let inFrontmatter = false;
 
-            taskLines.forEach((l) => {
-              const m = l.match(/`?\[(.)\]`?\s*(.+)/);
-              if (m) {
-                const col = this.cols.find((c) => c.symbol === m[1]);
-                if (col) col.tasks.push({ symbol: m[1], text: m[2] });
+            for (let i = 0; i < lines.length; i++) {
+              const line = lines[i];
+
+              // Frontmatter guards
+              if (line.trim() === "---") {
+                inFrontmatter = !inFrontmatter;
+                continue;
               }
-            });
+              if (inFrontmatter) continue;
+
+              // Top-level task
+              const taskMatch = line.match(/^\s*-\s*`?\[(.)\]`?\s*(.+)/);
+              const subtaskMatch = line.match(/^\s{2,}-\s*`?\[(.)\]`?\s*(.+)/);
+              const indentMatch = line.match(/^\s{2,}(?!- )(.+)/); // description
+
+              if (taskMatch && !line.startsWith("  -")) {
+                const [ , symbol, text ] = taskMatch;
+                const col = this.cols.find((c) => c.symbol === symbol);
+                if (!col) continue;
+
+                currentTask = {
+                  symbol,
+                  text,
+                  description: "",
+                  subtasks: [],
+                };
+                col.tasks.push(currentTask);
+
+              } else if (subtaskMatch && currentTask) {
+                const [ , stSymbol, stText ] = subtaskMatch;
+                currentTask.subtasks.push({ symbol: stSymbol, text: stText });
+
+              } else if (indentMatch && currentTask) {
+                const lineText = indentMatch[1];
+                if (currentTask.description) {
+                  currentTask.description += "\n" + lineText;
+                } else {
+                  currentTask.description = lineText;
+                }
+              }
+            }
           }
+
 
           updateSettings(data) {
             if (data.title) {
               this.config["board-title"] = data.title;
-              this.setTitle(); // re-render title
+              this.setTitle();
+            }
+
+            if ("saveAsCols" in data) {
+              this.config["save-as-cols"] = data.saveAsCols ? "true" : "false";
             }
           }
+
 
           setupBoard() {
             this.innerHTML = "";
@@ -494,11 +561,14 @@
         const board = document.querySelector("kanban-board");
         if (!board) return;
 
-        const title = document.getElementById("board-title-input").value.trim();
-        board.updateSettings({ title });
+        board.updateSettings({
+          title: document.getElementById("board-title-input").value.trim(),
+          saveAsCols: document.getElementById("save-as-cols").checked,
+        });
 
         closeModal(document.getElementById("settings-modal"));
       };
+
 
       /*
        * Modal
